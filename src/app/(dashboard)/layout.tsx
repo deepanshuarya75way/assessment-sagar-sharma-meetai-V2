@@ -1,0 +1,21 @@
+import { SidebarProvider } from "@/frontend/components/ui/sidebar";
+import { DashboardNavbar } from "@/frontend/modules/dashboard/ui/components/dashboard-navbar";
+import { DashboardSidebar } from "@/frontend/modules/dashboard/ui/components/dashboard-sidebar";
+
+interface Props {
+  children: React.ReactNode;
+}
+
+const Layout = ({ children }: Props) => {
+  return (
+    <SidebarProvider>
+      <DashboardSidebar />
+      <main className="flex h-svh min-w-0 flex-1 flex-col overflow-hidden bg-muted">
+        <DashboardNavbar />
+        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+      </main>
+    </SidebarProvider>
+  );
+};
+
+export default Layout;
