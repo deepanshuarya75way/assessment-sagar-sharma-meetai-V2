@@ -1,20 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LoaderIcon } from "lucide-react";
-import { useMutation } from "@tanstack/react-query";
 import {
   Call,
-  CallingState,
   StreamCall,
   StreamVideo,
   StreamVideoClient,
 } from "@stream-io/video-react-sdk";
-
+import { useMutation } from "@tanstack/react-query";
 import { useTRPC } from "@/trpc/client";
-
 import { CallUI } from "./call-ui";
-
 import "@stream-io/video-react-sdk/dist/css/styles.css";
 
 interface Props {
@@ -33,54 +29,55 @@ export const CallConnect = ({
   userImage,
 }: Props) => {
   const trpc = useTRPC();
+
   const { mutateAsync: generateToken } = useMutation(
     trpc.meetings.generateToken.mutationOptions(),
   );
 
-  const [client, setClient] = useState<StreamVideoClient>();
+  const generateTokenRef = useRef(generateToken);
 
   useEffect(() => {
-    const _client = new StreamVideoClient({
+    generateTokenRef.current = generateToken;
+  }, [generateToken]);
+
+  const [client, setClient] = useState<StreamVideoClient>();
+  const [call, setCall] = useState<Call>();
+
+  useEffect(() => {
+    const streamClient = new StreamVideoClient({
       apiKey: process.env.NEXT_PUBLIC_STREAM_VIDEO_API_KEY!,
       user: {
         id: userId,
         name: userName,
         image: userImage,
       },
-      tokenProvider: generateToken,
+      tokenProvider: () => generateTokenRef.current(),
     });
 
-    setClient(_client);
+    setClient(streamClient);
 
     return () => {
-      _client.disconnectUser();
-      setClient(undefined);
+      void streamClient.disconnectUser();
     };
-  }, [userId, userName, userImage, generateToken]);
-
-  const [call, setCall] = useState<Call>();
+  }, [userId, userName, userImage]);
 
   useEffect(() => {
     if (!client) return;
 
-    const _call = client.call("default", meetingId);
-    _call.camera.disable();
-    _call.microphone.disable();
-    setCall(_call);
+    const streamCall = client.call("default", meetingId);
+
+    setCall(streamCall);
 
     return () => {
-      if (_call.state.callingState !== CallingState.LEFT) {
-        _call.leave();
-        _call.endCall();
-        setCall(undefined);
-      }
+      void streamCall.leave();
+      setCall(undefined);
     };
   }, [client, meetingId]);
 
   if (!client || !call) {
     return (
-      <div className="flex h-screen items-center justify-center bg-radial from-sidebar-accent to-sidebar">
-        <LoaderIcon className="size-6 animate-spin text-white" />
+      <div className="flex h-full items-center justify-center">
+        <LoaderIcon className="size-6 animate-spin" />
       </div>
     );
   }
