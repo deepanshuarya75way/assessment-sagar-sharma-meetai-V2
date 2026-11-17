@@ -9,7 +9,6 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { gunzipSync } from "zlib";
 import type {
   CallRecordingReadyEvent,
-  CallSessionParticipantLeftEvent,
   CallSessionStartedEvent,
   CallTranscriptionReadyEvent,
   CallSessionEndedEvent,
@@ -22,7 +21,6 @@ import {
   meetings,
   user,
 } from "@/backend/db/schema";
-import { getStreamVideo } from "@/backend/lib/stream-video";
 import { getStreamChat } from "@/backend/lib/stream-chat";
 import { generateAvatarUri } from "@/frontend/lib/avatar";
 
@@ -45,68 +43,99 @@ const generateGeminiResponse = async ({
     );
   }
 
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [
-            {
-              text: systemInstruction,
-            },
-          ],
+  const maxAttempts = 3;
+
+  for (
+    let attempt = 1;
+    attempt <= maxAttempts;
+    attempt++
+  ) {
+    const response = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
         },
-        contents: conversation.map(
-          (message) => ({
-            role: message.role,
+        body: JSON.stringify({
+          system_instruction: {
             parts: [
               {
-                text: message.content,
+                text: systemInstruction,
               },
             ],
-          }),
-        ),
-        generationConfig: {
-          temperature: 0.3,
-        },
-      }),
-    },
-  );
+          },
+          contents: conversation.map(
+            (message) => ({
+              role: message.role,
+              parts: [
+                {
+                  text: message.content,
+                },
+              ],
+            }),
+          ),
+          generationConfig: {
+            temperature: 0.3,
+          },
+        }),
+      },
+    );
 
-  if (!response.ok) {
+    if (response.ok) {
+      const data = await response.json();
+
+      const responseText =
+        data?.candidates?.[0]?.content?.parts
+          ?.map(
+            (part: { text?: string }) =>
+              part.text || "",
+          )
+          .join("")
+          .trim();
+
+      if (!responseText) {
+        throw new Error(
+          "Gemini returned an empty response",
+        );
+      }
+
+      return responseText;
+    }
+
     const errorText =
       await response.text();
+
+    if (
+      (
+        response.status === 429 ||
+        response.status === 500 ||
+        response.status === 502 ||
+        response.status === 503 ||
+        response.status === 504
+      ) &&
+      attempt < maxAttempts
+    ) {
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          1000 * attempt,
+        ),
+      );
+
+      continue;
+    }
 
     throw new Error(
       `Gemini API failed (${response.status}): ${errorText}`,
     );
   }
 
-  const data = await response.json();
-
-  const responseText =
-    data?.candidates?.[0]?.content?.parts
-      ?.map(
-        (part: { text?: string }) =>
-          part.text || "",
-      )
-      .join("")
-      .trim();
-
-  if (!responseText) {
-    throw new Error(
-      "Gemini returned an empty response",
-    );
-  }
-
-  return responseText;
+  throw new Error(
+    "Gemini API failed after retries",
+  );
 };
-
 
 const generateMeetingSummary = async (
   transcript: any[],
@@ -295,14 +324,6 @@ export async function POST(
     eventType,
   );
 
-  const streamVideo =
-    getStreamVideo();
-
-  /*
-   * ============================================================
-   * CALL SESSION STARTED
-   * ============================================================
-   */
   if (
     eventType ===
     "call.session_started"
@@ -387,49 +408,7 @@ export async function POST(
       "MEETING STATUS: upcoming -> active",
       meetingId,
     );
-
-
-  }
-
-  /*
-   * ============================================================
-   * PARTICIPANT LEFT
-   * ============================================================
-   */
-  else if (
-    eventType ===
-    "call.session_participant_left"
-  ) {
-    const event =
-      payload as CallSessionParticipantLeftEvent;
-
-    const meetingId =
-      event.call_cid.split(":")[1];
-
-    if (!meetingId) {
-      return NextResponse.json(
-        {
-          error: "Missing meetingId",
-        },
-        { status: 400 },
-      );
-    }
-
-    const call =
-      streamVideo.video.call(
-        "default",
-        meetingId,
-      );
-
-    await call.end();
-  }
-
-  /*
-   * ============================================================
-   * SESSION ENDED
-   * ============================================================
-   */
-  else if (
+  } else if (
     eventType ===
     "call.session_ended"
   ) {
@@ -471,14 +450,7 @@ export async function POST(
       "MEETING STATUS: active -> processing",
       meetingId,
     );
-  }
-
-  /*
-   * ============================================================
-   * TRANSCRIPTION READY
-   * ============================================================
-   */
-  else if (
+  } else if (
     eventType ===
     "call.transcription_ready"
   ) {
@@ -495,6 +467,41 @@ export async function POST(
         },
         { status: 400 },
       );
+    }
+
+    const [existingMeeting] =
+      await db
+        .select()
+        .from(meetings)
+        .where(
+          eq(
+            meetings.id,
+            meetingId,
+          ),
+        );
+
+    if (!existingMeeting) {
+      return NextResponse.json(
+        {
+          error: "Meeting not found",
+        },
+        { status: 404 },
+      );
+    }
+
+    if (
+      existingMeeting.status ===
+        "completed" &&
+      existingMeeting.summary
+    ) {
+      console.log(
+        "MEETING ALREADY COMPLETED:",
+        meetingId,
+      );
+
+      return NextResponse.json({
+        status: "ok",
+      });
     }
 
     const [updatedMeeting] =
@@ -646,14 +653,7 @@ export async function POST(
         error,
       );
     }
-  }
-
-  /*
-   * ============================================================
-   * RECORDING READY
-   * ============================================================
-   */
-  else if (
+  } else if (
     eventType ===
     "call.recording_ready"
   ) {
@@ -684,14 +684,7 @@ export async function POST(
           meetingId,
         ),
       );
-  }
-
-  /*
-   * ============================================================
-   * POST-MEETING CHAT
-   * ============================================================
-   */
-  else if (
+  } else if (
     eventType === "message.new"
   ) {
     const event =
@@ -831,7 +824,6 @@ Be concise, helpful, and accurate.
           }),
         );
 
-    
     const geminiResponse =
       await generateGeminiResponse({
         systemInstruction:

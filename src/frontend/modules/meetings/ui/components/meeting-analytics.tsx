@@ -62,8 +62,7 @@ export const MeetingAnalytics = ({
   const analytics = useMemo(() => {
     const items = transcript ?? [];
 
-    // Assignment: derive meeting duration from the actual meeting timestamps.
-    // Transcript timestamps are relative millisecond offsets from meeting start.
+  
     const meetingDurationMs =
       meeting.startedAt && meeting.endedAt
         ? Math.max(
@@ -88,7 +87,6 @@ export const MeetingAnalytics = ({
       }
     >();
 
-    // Assignment: aggregate talk time and speaking turns per speaker.
     for (const item of items) {
       const duration = Math.max(
         0,
@@ -149,14 +147,13 @@ export const MeetingAnalytics = ({
           b.talkTimeMs - a.talkTimeMs,
       );
 
-    // Assignment: divide the meeting into 24 equal time buckets.
+    
     const bucketDurationMs =
       meetingDurationMs > 0
         ? meetingDurationMs /
           HEATMAP_BUCKETS
         : 1;
 
-    // Assignment: calculate each speaker's speaking activity in every bucket.
     const heatmap = speakerStats.map(
       (speaker) => {
         const speakerItems = items.filter(

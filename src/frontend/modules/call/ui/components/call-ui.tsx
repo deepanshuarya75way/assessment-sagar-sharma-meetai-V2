@@ -21,9 +21,8 @@ export const CallUI = ({
 }: Props) => {
   const call = useCall();
 
-  const {
-    useCallCallingState,
-  } = useCallStateHooks();
+  const { useCallCallingState } =
+    useCallStateHooks();
 
   const callingState =
     useCallCallingState();
@@ -35,19 +34,14 @@ export const CallUI = ({
   const joiningRef = useRef(false);
 
   const handleJoin = async () => {
-    if (!call) return;
+    if (!call || joiningRef.current) return;
 
-    if (
-      callingState === CallingState.JOINING ||
-      callingState === CallingState.JOINED ||
-      joiningRef.current
-    ) {
-      if (
-        callingState === CallingState.JOINED
-      ) {
-        setShow("call");
-      }
+    if (callingState === CallingState.JOINED) {
+      setShow("call");
+      return;
+    }
 
+    if (callingState === CallingState.JOINING) {
       return;
     }
 
@@ -56,21 +50,30 @@ export const CallUI = ({
     try {
       await call.join();
 
-      // Enable microphone after successful join.
-      await call.microphone.enable();
-
       setShow("call");
+
+      try {
+        await call.microphone.enable();
+      } catch (error) {
+        console.error(
+          "Failed to enable microphone:",
+          error,
+        );
+      }
+
+      try {
+        await call.camera.enable();
+      } catch (error) {
+        console.error(
+          "Failed to enable camera:",
+          error,
+        );
+      }
     } catch (error) {
       console.error(
         "Failed to join meeting:",
         error,
       );
-
-      /*
-       * Do not immediately call join() again.
-       * Stream may still be transitioning its
-       * internal calling state.
-       */
     } finally {
       joiningRef.current = false;
     }
